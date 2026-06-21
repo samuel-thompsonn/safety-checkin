@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Safety monitor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0a0a; color: #f0f0f0;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 2rem;
+    transition: background 0.4s;
+  }
+  body.warning-state { background: #120e00; }
+  body.alarming { background: #1a0000; }
+  h1 { font-size: 15px; font-weight: 400; color: #555; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 2rem; text-align: center; }
+  .countdown { font-size: 80px; font-weight: 300; letter-spacing: -4px; text-align: center; line-height: 1; font-variant-numeric: tabular-nums; margin-bottom: 0.5rem; }
+  .countdown.ok { color: #f0f0f0; }
+  .countdown.warn { color: #EF9F27; }
+  .countdown.alarm { color: #E24B4A; }
+  .sublabel { font-size: 13px; color: #555; text-align: center; margin-bottom: 2rem; min-height: 18px; }
+  .status-pill {
+    padding: 6px 16px; border-radius: 20px; font-size: 13px; margin-bottom: 2rem;
+    border: 1px solid #2a2a2a; color: #555;
+  }
+  .status-pill.ok { border-color: #1D9E75; color: #1D9E75; background: #001a10; }
+  .status-pill.warn { border-color: #EF9F27; color: #EF9F27; background: #1a1000; }
+  .status-pill.alarm { border-color: #E24B4A; color: #E24B4A; background: #1a0000; }
+  .alarm-box {
+    display: none; background: #1a0000; border: 2px solid #E24B4A;
+    border-radius: 12px; padding: 1.5rem 2rem; text-align: center;
+    width: 100%; max-width: 340px; margin-bottom: 1.5rem;
+  }
+  .alarm-box.visible { display: block; }
+  .alarm-title { font-size: 20px; font-weight: 500; color: #E24B4A; margin-bottom: 0.4rem; }
+  .alarm-sub { font-size: 13px; color: #993C1D; margin-bottom: 1rem; }
+  .btn-silence {
+    padding: 10px 24px; background: #2a0000; border: 1px solid #E24B4A;
+    color: #E24B4A; font-size: 14px; border-radius: 8px; cursor: pointer;
+  }
+  .btn-silence:hover { background: #3a0000; }
+  .last-seen { font-size: 12px; color: #333; text-align: center; margin-top: 1.5rem; min-height: 16px; }
+  .poll-dot { width: 6px; height: 6px; border-radius: 50%; background: #2a2a2a; display: inline-block; margin-left: 6px; vertical-align: middle; transition: background 0.3s; }
+  .poll-dot.active { background: #1D9E75; }
+  .tip { font-size: 12px; color: #2a2a2a; text-align: center; margin-top: 1.5rem; max-width: 300px; line-height: 1.6; }
+  .progress-wrap { width: 220px; height: 4px; background: #1a1a1a; border-radius: 2px; margin-bottom: 2rem; }
+  .progress-fill { height: 100%; border-radius: 2px; background: #333; transition: width 1s linear; }
+</style>
+</head>
+<body>
+<h1>Safety monitor</h1>
+
+<div class="countdown ok" id="countdown">—:——</div>
+<div class="sublabel" id="sublabel">Waiting for session to start</div>
+<div class="progress-wrap"><div class="progress-fill" id="prog" style="width:0%"></div></div>
+<div class="status-pill" id="status-pill">Waiting</div>
+
+<div class="alarm-box" id="alarm-box">
+  <div class="alarm-title">Check on your friend</div>
+  <div class="alarm-sub" id="alarm-sub">They missed their check-in.</div>
+  <button class="btn-silence" onclick="silenceAlarm()">Silence alarm</button>
+</div>
+
+<div class="last-seen" id="last-seen">
+  Open your friend's check-in page to begin <span class="poll-dot" id="poll-dot"></span>
+</div>
+<p class="tip">Keep this tab open with volume up. It checks Firebase every 3 seconds.</p>
+
+<script>
+const DB = 'https://sam-check-in-default-rtdb.firebaseio.com/session.json';
+let alarmCtx, alarmActive = false;
+let localRemaining = null, localTotal = null, localWarn = null;
+let localTicker = null, lastTs = null, lastType = null;
+
+function fmt(s) {
+  if (s === null || s < 0) return '—:——';
+  const m = Math.floor(s / 60), sec = s % 60;
+  return m + ':' + String(sec).padStart(2, '0');
+}
+
+function setDisplay(state, sub) {
+  const cd = document.getElementById('countdown');
+  const pill = document.getElementById('status-pill');
+  const sl = document.getElementById('sublabel');
+  cd.className = 'countdown ' + (state === 'waiting' ? 'ok' : state);
+  pill.className = 'status-pill ' + (state === 'waiting' ? '' : state);
+  if (state === 'ok') { pill.textContent = 'Checked in'; document.body.className = ''; }
+  else if (state === 'warn') { pill.textContent = 'Check-in due soon'; document.body.className = 'warning-state'; }
+  else if (state === 'alarm') { pill.textContent = 'Missed check-in'; document.body.className = 'alarming'; }
+  else { pill.textContent = 'Waiting'; document.body.className = ''; cd.textContent = '—:——'; }
+  if (sub) sl.textContent = sub;
+}
+
+async function poll() {
+  const dot = document.getElementById('poll-dot');
+  if (dot) { dot.className = 'poll-dot active'; setTimeout(() => dot.className = 'poll-dot', 400); }
+
+  try {
+    const res = await fetch(DB + '?t=' + Date.now());
+    if (!res.ok) { document.getElementById('last-seen').textContent = 'DB error ' + res.status + ' — check Firebase rules'; return; }
+    const data = await res.json();
+    if (!data) return;
+
+    const key = data.ts + '|' + data.type;
+    if (key === lastTs) return;
+    lastTs = key;
+
+    if (data.totalSec) { localTotal = data.totalSec; localWarn = data.warnSec || 0; }
+
+    if (data.type === 'start' || data.type === 'checkin') {
+      localRemaining = localTotal;
+      alarmActive = false;
+      stopAlarm();
+      document.getElementById('alarm-box').className = 'alarm-box';
+      document.getElementById('countdown').className = 'countdown ok';
+      document.body.className = '';
+      setDisplay('ok', 'until your friend is alerted');
+      document.getElementById('prog').style.width = '100%';
+      document.getElementById('last-seen').textContent = 'Last check-in: ' + new Date(data.ts).toLocaleTimeString() + ' \u2022 polling\u2009';
+    } else if (data.type === 'warning') {
+      setDisplay('warn', 'Check-in due very soon');
+      document.getElementById('last-seen').textContent = 'Warning at ' + new Date(data.ts).toLocaleTimeString() + ' \u2022 polling\u2009';
+    } else if (data.type === 'alert' && !alarmActive) {
+      alarmActive = true;
+      localRemaining = 0;
+      document.getElementById('prog').style.width = '0%';
+      document.getElementById('countdown').textContent = '0:00';
+      setDisplay('alarm', 'No check-in received');
+      document.getElementById('alarm-sub').textContent = 'Alert triggered at ' + new Date(data.ts).toLocaleTimeString();
+      document.getElementById('alarm-box').className = 'alarm-box visible';
+      document.getElementById('last-seen').textContent = 'Alarm triggered \u2022 polling\u2009';
+      triggerAlarm();
+    } else if (data.type === 'stop') {
+      stopAlarm();
+      localRemaining = null;
+      setDisplay('waiting', 'Session ended by your friend');
+      document.getElementById('last-seen').textContent = 'Session stopped.';
+    }
+  } catch(e) {
+    document.getElementById('last-seen').textContent = 'Network error — retrying...';
+  }
+}
+
+function localTick() {
+  if (localRemaining === null || alarmActive) return;
+  localRemaining = Math.max(0, localRemaining - 1);
+  document.getElementById('countdown').textContent = fmt(localRemaining);
+  const pct = localTotal ? Math.max(0, localRemaining / localTotal * 100) : 0;
+  document.getElementById('prog').style.width = pct + '%';
+  if (localWarn && localRemaining <= localWarn && !alarmActive) {
+    setDisplay('warn', 'Check-in due very soon');
+  }
+}
+
+function triggerAlarm() {
+  try {
+    alarmCtx = new (window.AudioContext || window.webkitAudioContext)();
+    loopAlarm();
+  } catch(e) {}
+}
+
+function loopAlarm() {
+  if (!alarmActive || !alarmCtx) return;
+  const pattern = [960, 960, 720, 0, 960, 960, 720, 0];
+  let t = alarmCtx.currentTime;
+  pattern.forEach(freq => {
+    if (freq > 0) {
+      const osc = alarmCtx.createOscillator();
+      const gain = alarmCtx.createGain();
+      osc.connect(gain); gain.connect(alarmCtx.destination);
+      osc.type = 'square'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.5, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      osc.start(t); osc.stop(t + 0.22);
+    }
+    t += 0.25;
+  });
+  setTimeout(() => { if (alarmActive) loopAlarm(); }, pattern.length * 250 + 500);
+}
+
+function stopAlarm() {
+  alarmActive = false;
+  if (alarmCtx) { try { alarmCtx.close(); } catch(e) {} alarmCtx = null; }
+}
+
+function silenceAlarm() {
+  stopAlarm();
+  document.getElementById('alarm-box').className = 'alarm-box';
+  document.getElementById('sublabel').textContent = 'Alarm silenced — check on your friend';
+  document.body.className = '';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  poll();
+  setInterval(poll, 3000);
+  localTicker = setInterval(localTick, 1000);
+});
+</script>
+</body>
+</html>
