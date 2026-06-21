@@ -122,6 +122,7 @@ function startSession() {
   rs.style.display = 'flex';
   document.getElementById('clock').textContent = fmt(totalSec);
 
+  Notification.requestPermission();
   writeState('start');
   ticker = setInterval(tick, 1000);
 }
@@ -138,6 +139,9 @@ function tick() {
     document.getElementById('clock').className = 'clock warn';
     document.getElementById('checkin-btn').className = 'btn-checkin warn';
     writeState('warning');
+    if (Notification.permission === 'granted') {
+      new Notification('Check in soon', { body: 'Your friend will be alerted in ' + Math.round(warnSec / 60) + ' minutes.', requireInteraction: true });
+    }
   }
 
   if (remaining <= 0) {

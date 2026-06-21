@@ -45,6 +45,8 @@
   .poll-dot { width: 6px; height: 6px; border-radius: 50%; background: #2a2a2a; display: inline-block; margin-left: 6px; vertical-align: middle; transition: background 0.3s; }
   .poll-dot.active { background: #1D9E75; }
   .tip { font-size: 12px; color: #2a2a2a; text-align: center; margin-top: 1.5rem; max-width: 300px; line-height: 1.6; }
+  .btn-test { margin-top: 1.5rem; padding: 8px 20px; background: none; border: 1px solid #2a2a2a; color: #444; font-size: 13px; border-radius: 8px; cursor: pointer; }
+  .btn-test:hover { border-color: #555; color: #888; }
   .progress-wrap { width: 220px; height: 4px; background: #1a1a1a; border-radius: 2px; margin-bottom: 2rem; }
   .progress-fill { height: 100%; border-radius: 2px; background: #333; transition: width 1s linear; }
 </style>
@@ -66,6 +68,7 @@
 <div class="last-seen" id="last-seen">
   Open your friend's check-in page to begin <span class="poll-dot" id="poll-dot"></span>
 </div>
+<button class="btn-test" onclick="testAlarm()">Test alarm</button>
 <p class="tip">Keep this tab open with volume up. It checks Firebase every 3 seconds.</p>
 
 <script>
@@ -190,6 +193,18 @@ function silenceAlarm() {
   document.getElementById('alarm-box').className = 'alarm-box';
   document.getElementById('sublabel').textContent = 'Alarm silenced — check on your friend';
   document.body.className = '';
+}
+
+function testAlarm() {
+  if (alarmActive) { stopAlarm(); return; }
+  alarmActive = true;
+  triggerAlarm();
+  const btn = document.querySelector('.btn-test');
+  btn.textContent = 'Stop test';
+  setTimeout(() => {
+    stopAlarm();
+    btn.textContent = 'Test alarm';
+  }, 5000);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
